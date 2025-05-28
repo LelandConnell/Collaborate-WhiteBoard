@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Collaborative Whiteboard</title>
+    <title>P2P Collaborative Whiteboard</title>
     <style>
         * {
             margin: 0;
@@ -15,6 +15,85 @@
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: #f0f2f5;
             overflow: hidden;
+        }
+
+        .connection-panel {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            padding: 15px;
+            z-index: 1001;
+            min-width: 250px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .connection-panel h3 {
+            margin-bottom: 10px;
+            color: #333;
+            font-size: 14px;
+        }
+
+        .peer-id-display {
+            background: #f8f9fa;
+            padding: 8px;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 12px;
+            margin-bottom: 10px;
+            word-break: break-all;
+        }
+
+        .connect-input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            font-size: 12px;
+        }
+
+        .connect-btn {
+            width: 100%;
+            padding: 8px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .connect-btn:hover {
+            background: #0056b3;
+        }
+
+        .connected-users {
+            margin-top: 10px;
+            font-size: 12px;
+        }
+
+        .user-item {
+            background: #e7f3ff;
+            padding: 4px 8px;
+            margin: 2px 0;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .disconnect-btn {
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            padding: 2px 6px;
+            cursor: pointer;
+            font-size: 10px;
         }
 
         .toolbar {
@@ -184,10 +263,33 @@
             .tool-group {
                 flex-wrap: wrap;
             }
+
+            .connection-panel {
+                top: 10px;
+                right: 10px;
+                left: 10px;
+                position: relative;
+                margin-bottom: 10px;
+            }
         }
     </style>
 </head>
 <body>
+    <div class="connection-panel">
+        <h3>🔗 P2P Connection</h3>
+        <div>
+            <strong>Your ID:</strong>
+            <div class="peer-id-display" id="myPeerId">Connecting...</div>
+        </div>
+        <input type="text" class="connect-input" id="connectInput" placeholder="Enter peer ID to connect">
+        <button class="connect-btn" onclick="connectToPeer()">Connect</button>
+        
+        <div class="connected-users">
+            <strong>Connected Users:</strong>
+            <div id="connectedUsersList"></div>
+        </div>
+    </div>
+
     <div class="toolbar">
         <div class="tool-group">
             <button class="tool-btn active" data-tool="pen" title="Pen">✏️</button>
@@ -223,8 +325,11 @@
         <span id="status">Ready to draw</span>
     </div>
 
+    <!-- PeerJS CDN -->
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+
     <script>
-        class CollaborativeWhiteboard {
+        class P2PCollaborativeWhiteboard {
             constructor() {
                 this.canvas = document.getElementById('canvas');
                 this.ctx = this.canvas.getContext('2d');
@@ -236,12 +341,138 @@
                 this.startY = 0;
                 this.history = [];
                 this.historyStep = -1;
-                this.collaborators = new Map();
+                
+                // P2P specific properties
+                this.peer = null;
+                this.connections = new Map();
+                this.remoteCursors = new Map();
+                this.myUserId = 'user_' + Math.random().toString(36).substr(2, 9);
+                this.userName = 'User ' + this.myUserId.substr(-4);
+                this.userColor = this.getRandomColor();
                 
                 this.setupCanvas();
                 this.bindEvents();
                 this.saveState();
-                this.simulateCollaborators();
+                this.initializePeer();
+            }
+
+            initializePeer() {
+                try {
+                    this.peer = new Peer();
+                    
+                    this.peer.on('open', (id) => {
+                        console.log('My peer ID is: ' + id);
+                        document.getElementById('myPeerId').textContent = id;
+                        this.updateStatus('Ready - Share your ID with others to collaborate');
+                    });
+
+                    this.peer.on('connection', (conn) => {
+                        this.handleConnection(conn);
+                    });
+
+                    this.peer.on('error', (err) => {
+                        console.error('PeerJS error:', err);
+                        this.updateStatus('Connection error: ' + err.message);
+                    });
+                } catch (error) {
+                    console.error('Failed to initialize PeerJS:', error);
+                    this.updateStatus('Failed to initialize P2P connection');
+                }
+            }
+
+            connectToPeer() {
+                const peerId = document.getElementById('connectInput').value.trim();
+                if (!peerId) return;
+
+                try {
+                    const conn = this.peer.connect(peerId);
+                    this.handleConnection(conn);
+                    document.getElementById('connectInput').value = '';
+                } catch (error) {
+                    console.error('Failed to connect to peer:', error);
+                    this.updateStatus('Failed to connect to peer');
+                }
+            }
+
+            handleConnection(conn) {
+                this.connections.set(conn.peer, conn);
+                
+                conn.on('open', () => {
+                    this.updateStatus(`Connected to ${conn.peer}`);
+                    this.updateConnectedUsersList();
+                    
+                    // Send initial user info
+                    conn.send({
+                        type: 'user_info',
+                        userId: this.myUserId,
+                        userName: this.userName,
+                        userColor: this.userColor
+                    });
+
+                    // Send current canvas state to new peer
+                    if (this.history.length > 0) {
+                        conn.send({
+                            type: 'canvas_state',
+                            imageData: this.canvas.toDataURL()
+                        });
+                    }
+                });
+
+                conn.on('data', (data) => {
+                    this.handleRemoteData(data, conn.peer);
+                });
+
+                conn.on('close', () => {
+                    this.connections.delete(conn.peer);
+                    this.remoteCursors.delete(conn.peer);
+                    this.updateConnectedUsersList();
+                    this.removeRemoteCursor(conn.peer);
+                    this.updateStatus(`${conn.peer} disconnected`);
+                });
+
+                conn.on('error', (err) => {
+                    console.error('Connection error:', err);
+                    this.connections.delete(conn.peer);
+                    this.updateConnectedUsersList();
+                });
+            }
+
+            handleRemoteData(data, peerId) {
+                switch (data.type) {
+                    case 'drawing_start':
+                        this.handleRemoteDrawingStart(data);
+                        break;
+                    case 'drawing_move':
+                        this.handleRemoteDrawingMove(data);
+                        break;
+                    case 'drawing_end':
+                        this.handleRemoteDrawingEnd(data);
+                        break;
+                    case 'cursor_move':
+                        this.handleRemoteCursorMove(data, peerId);
+                        break;
+                    case 'canvas_clear':
+                        this.handleRemoteCanvasClear();
+                        break;
+                    case 'canvas_state':
+                        this.handleRemoteCanvasState(data);
+                        break;
+                    case 'user_info':
+                        this.handleRemoteUserInfo(data, peerId);
+                        break;
+                }
+            }
+
+            broadcastToAll(data) {
+                this.connections.forEach(conn => {
+                    if (conn.open) {
+                        try {
+                            conn.send(data);
+                        } catch (error) {
+                            console.error('Failed to send data to peer:', error);
+                        }
+                    }
+                });
             }
 
             setupCanvas() {
@@ -321,6 +552,13 @@
                 this.canvas.addEventListener('mousemove', (e) => {
                     this.updateCursorPosition(e);
                 });
+
+                // Connect input enter key
+                document.getElementById('connectInput').addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        this.connectToPeer();
+                    }
+                });
             }
 
             updateCursor() {
@@ -359,7 +597,18 @@
                     this.ctx.moveTo(pos.x, pos.y);
                 }
 
-                document.getElementById('status').textContent = 'Drawing...';
+                // Broadcast drawing start to peers
+                this.broadcastToAll({
+                    type: 'drawing_start',
+                    x: pos.x,
+                    y: pos.y,
+                    tool: this.currentTool,
+                    color: this.currentColor,
+                    size: this.currentSize,
+                    userId: this.myUserId
+                });
+
+                this.updateStatus('Drawing...');
             }
 
             draw(e) {
@@ -378,6 +627,15 @@
                     this.redrawCanvas();
                     this.drawShape(this.startX, this.startY, pos.x, pos.y);
                 }
+
+                // Broadcast drawing move to peers
+                this.broadcastToAll({
+                    type: 'drawing_move',
+                    x: pos.x,
+                    y: pos.y,
+                    tool: this.currentTool,
+                    userId: this.myUserId
+                });
             }
 
             drawShape(startX, startY, endX, endY) {
@@ -406,7 +664,106 @@
                     this.isDrawing = false;
                     this.ctx.globalCompositeOperation = 'source-over';
                     this.saveState();
-                    document.getElementById('status').textContent = 'Ready to draw';
+
+                    // Broadcast drawing end to peers
+                    this.broadcastToAll({
+                        type: 'drawing_end',
+                        userId: this.myUserId
+                    });
+
+                    this.updateStatus('Ready to draw');
+                }
+            }
+
+            // Handle remote drawing events
+            handleRemoteDrawingStart(data) {
+                this.ctx.beginPath();
+                this.ctx.strokeStyle = data.color;
+                this.ctx.lineWidth = data.size;
+                this.ctx.globalCompositeOperation = data.tool === 'eraser' ? 'destination-out' : 'source-over';
+                this.ctx.moveTo(data.x, data.y);
+            }
+
+            handleRemoteDrawingMove(data) {
+                this.ctx.lineTo(data.x, data.y);
+                this.ctx.stroke();
+            }
+
+            handleRemoteDrawingEnd(data) {
+                this.ctx.globalCompositeOperation = 'source-over';
+                // Don't save state for remote drawings to avoid conflicts
+            }
+
+            handleRemoteCursorMove(data, peerId) {
+                if (!this.remoteCursors.has(peerId)) {
+                    this.remoteCursors.set(peerId, {
+                        name: data.userName || 'Unknown',
+                        color: data.userColor || '#666'
+                    });
+                    this.createRemoteCursor(peerId, this.remoteCursors.get(peerId));
+                }
+                this.updateRemoteCursor(peerId, data.x, data.y);
+            }
+
+            handleRemoteCanvasClear() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                this.saveState();
+            }
+
+            handleRemoteCanvasState(data) {
+                const img = new Image();
+                img.onload = () => {
+                    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                    this.ctx.drawImage(img, 0, 0);
+                    this.saveState();
+                };
+                img.src = data.imageData;
+            }
+
+            handleRemoteUserInfo(data, peerId) {
+                this.remoteCursors.set(peerId, {
+                    name: data.userName,
+                    color: data.userColor
+                });
+            }
+
+            updateCursorPosition(e) {
+                const pos = this.getMousePos(e);
+                
+                // Broadcast cursor position to peers
+                this.broadcastToAll({
+                    type: 'cursor_move',
+                    x: pos.x,
+                    y: pos.y,
+                    userName: this.userName,
+                    userColor: this.userColor,
+                    userId: this.myUserId
+                });
+            }
+
+            createRemoteCursor(peerId, userInfo) {
+                const cursor = document.createElement('div');
+                cursor.className = 'cursor';
+                cursor.id = `cursor_${peerId}`;
+                cursor.style.color = userInfo.color;
+                cursor.innerHTML = `<div class="user-name">${userInfo.name}</div>`;
+                
+                document.getElementById('cursors').appendChild(cursor);
+            }
+
+            updateRemoteCursor(peerId, x, y) {
+                const cursor = document.getElementById(`cursor_${peerId}`);
+                if (cursor) {
+                    const canvasRect = this.canvas.getBoundingClientRect();
+                    cursor.style.left = (canvasRect.left + x) + 'px';
+                    cursor.style.top = (canvasRect.top + y) + 'px';
+                }
+            }
+
+            removeRemoteCursor(peerId) {
+                const cursor = document.getElementById(`cursor_${peerId}`);
+                if (cursor) {
+                    cursor.remove();
                 }
             }
 
@@ -429,70 +786,61 @@
                 }
             }
 
-            updateCursorPosition(e) {
-                // Simulate updating cursor position for collaboration
-                const pos = this.getMousePos(e);
-                // In a real collaborative app, you'd send this to other users
+            clearCanvas() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                this.saveState();
+
+                // Broadcast clear to peers
+                this.broadcastToAll({
+                    type: 'canvas_clear',
+                    userId: this.myUserId
+                });
+
+                this.updateStatus('Canvas cleared');
             }
 
-            simulateCollaborators() {
-                // Simulate other users' cursors moving around
-                const colors = ['#ff4757', '#2ed573', '#5352ed', '#ffa502', '#ff6b81'];
-                const names = ['Alice', 'Bob', 'Charlie', 'Diana', 'Eve'];
-                
-                for (let i = 0; i < 2; i++) {
-                    const collaborator = {
-                        id: `user_${i}`,
-                        name: names[i],
-                        color: colors[i],
-                        x: Math.random() * this.canvas.width,
-                        y: Math.random() * this.canvas.height
-                    };
-                    
-                    this.collaborators.set(collaborator.id, collaborator);
-                    this.createCursorElement(collaborator);
-                    
-                    // Animate cursor movement
-                    setInterval(() => {
-                        collaborator.x += (Math.random() - 0.5) * 20;
-                        collaborator.y += (Math.random() - 0.5) * 20;
-                        collaborator.x = Math.max(0, Math.min(this.canvas.width, collaborator.x));
-                        collaborator.y = Math.max(0, Math.min(this.canvas.height, collaborator.y));
-                        this.updateCursorElement(collaborator);
-                    }, 2000 + Math.random() * 3000);
+            disconnectPeer(peerId) {
+                const conn = this.connections.get(peerId);
+                if (conn) {
+                    conn.close();
                 }
             }
 
-            createCursorElement(collaborator) {
-                const cursor = document.createElement('div');
-                cursor.className = 'cursor';
-                cursor.id = `cursor_${collaborator.id}`;
-                cursor.style.color = collaborator.color;
-                cursor.innerHTML = `<div class="user-name">${collaborator.name}</div>`;
+            updateConnectedUsersList() {
+                const list = document.getElementById('connectedUsersList');
+                list.innerHTML = '';
                 
-                const canvasRect = this.canvas.getBoundingClientRect();
-                cursor.style.left = (canvasRect.left + collaborator.x) + 'px';
-                cursor.style.top = (canvasRect.top + collaborator.y) + 'px';
-                
-                document.getElementById('cursors').appendChild(cursor);
+                if (this.connections.size === 0) {
+                    list.innerHTML = '<div style="color: #666; font-style: italic;">No connections</div>';
+                    return;
+                }
+
+                this.connections.forEach((conn, peerId) => {
+                    if (conn.open) {
+                        const userItem = document.createElement('div');
+                        userItem.className = 'user-item';
+                        userItem.innerHTML = `
+                            <span>${peerId.substr(0, 8)}...</span>
+                            <button class="disconnect-btn" onclick="window.whiteboard.disconnectPeer('${peerId}')">×</button>
+                        `;
+                        list.appendChild(userItem);
+                    }
+                });
             }
 
-            updateCursorElement(collaborator) {
-                const cursor = document.getElementById(`cursor_${collaborator.id}`);
-                if (cursor) {
-                    const canvasRect = this.canvas.getBoundingClientRect();
-                    cursor.style.left = (canvasRect.left + collaborator.x) + 'px';
-                    cursor.style.top = (canvasRect.top + collaborator.y) + 'px';
-                }
+            updateStatus(message) {
+                document.getElementById('status').textContent = message;
+            }
+
+            getRandomColor() {
+                const colors = ['#ff4757', '#2ed573', '#5352ed', '#ffa502', '#ff6b81', '#3742fa', '#2f3542'];
+                return colors[Math.floor(Math.random() * colors.length)];
             }
         }
 
         // Global functions for toolbar buttons
         function clearCanvas() {
-            const whiteboard = window.whiteboard;
-            whiteboard.ctx.clearRect(0, 0, whiteboard.canvas.width, whiteboard.canvas.height);
-            whiteboard.saveState();
-            document.getElementById('status').textContent = 'Canvas cleared';
+            window.whiteboard.clearCanvas();
         }
 
         function undo() {
@@ -500,7 +848,7 @@
             if (whiteboard.historyStep > 0) {
                 whiteboard.historyStep--;
                 whiteboard.redrawCanvas();
-                document.getElementById('status').textContent = 'Undo';
+                whiteboard.updateStatus('Undo');
             }
         }
 
@@ -509,7 +857,7 @@
             if (whiteboard.historyStep < whiteboard.history.length - 1) {
                 whiteboard.historyStep++;
                 whiteboard.redrawCanvas();
-                document.getElementById('status').textContent = 'Redo';
+                whiteboard.updateStatus('Redo');
             }
         }
 
@@ -519,12 +867,16 @@
             link.download = 'whiteboard_' + new Date().getTime() + '.png';
             link.href = whiteboard.canvas.toDataURL();
             link.click();
-            document.getElementById('status').textContent = 'Downloaded';
+            whiteboard.updateStatus('Downloaded');
+        }
+
+        function connectToPeer() {
+            window.whiteboard.connectToPeer();
         }
 
         // Initialize the whiteboard when the page loads
         window.addEventListener('load', () => {
-            window.whiteboard = new CollaborativeWhiteboard();
+            window.whiteboard = new P2PCollaborativeWhiteboard();
         });
     </script>
 </body>
