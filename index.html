@@ -325,7 +325,7 @@
         <span id="status">Ready to draw</span>
     </div>
 
-    <!-- PeerJS CDN -->
+    <!-- connection online for both -->
     <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
 
     <script>
@@ -349,6 +349,8 @@
                 this.myUserId = 'user_' + Math.random().toString(36).substr(2, 9);
                 this.userName = 'User ' + this.myUserId.substr(-4);
                 this.userColor = this.getRandomColor();
+
+                this.remoteDrawingStates = new Map(); 
                 
                 this.setupCanvas();
                 this.bindEvents();
@@ -696,7 +698,7 @@
                 this.ctx.globalCompositeOperation = state.tool === 'eraser' ? 'destination-out' : 'source-over';
                 this.ctx.moveTo(state.y, state.y);
                 this.ctx.lineTo(data.x,data.y)
-                this.ctx.stoke();
+                this.ctx.stroke();
 
                 state.x = data.x;
                 state.y = data.y;
