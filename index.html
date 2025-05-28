@@ -677,16 +677,29 @@
 
             // Handle remote drawing events
             handleRemoteDrawingStart(data) {
-                this.ctx.beginPath();
-                this.ctx.strokeStyle = data.color;
-                this.ctx.lineWidth = data.size;
-                this.ctx.globalCompositeOperation = data.tool === 'eraser' ? 'destination-out' : 'source-over';
-                this.ctx.moveTo(data.x, data.y);
+                this.remoteDrawingStates.set(data.userId, {
+                    x:data.x,
+                    y:data.y,
+                    tool: data.tool,
+                    color: data.color,
+                    size: data.size
+                });
             }
 
             handleRemoteDrawingMove(data) {
-                this.ctx.lineTo(data.x, data.y);
-                this.ctx.stroke();
+                const state = this.remoteDrawingStates.get(data.userId);
+                if (!state) return;
+
+                this.ctx.beginPath();
+                this.ctx.strokeStyle = state.color;
+                this.ctx.lineWidth = state.size;
+                this.ctx.globalCompositeOperation = state.tool === 'eraser' ? 'destination-out' : 'source-over';
+                this.ctx.moveTo(state.y, state.y);
+                this.ctx.lineTo(data.x,data.y)
+                this.ctx.stoke();
+
+                state.x = data.x;
+                state.y = data.y;
             }
 
             handleRemoteDrawingEnd(data) {
