@@ -696,7 +696,7 @@
                 this.ctx.strokeStyle = state.color;
                 this.ctx.lineWidth = state.size;
                 this.ctx.globalCompositeOperation = state.tool === 'eraser' ? 'destination-out' : 'source-over';
-                this.ctx.moveTo(state.y, state.y);
+                this.ctx.moveTo(state.x, state.y);
                 this.ctx.lineTo(data.x,data.y)
                 this.ctx.stroke();
 
